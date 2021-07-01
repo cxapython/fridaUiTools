@@ -1,6 +1,9 @@
 # coding=utf-8
 import datetime
+import subprocess
 import sys
+import traceback
+
 from PyQt5 import uic, QtWidgets
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QCursor
@@ -27,7 +30,8 @@ import platform
 
 import TraceThread
 
-
+_temp = os.path.dirname(os.path.abspath(__file__))
+adb_path = os.path.join(_temp, "adb")
 
 class kmainForm(QMainWindow,Ui_KmainWindow):
     def __init__(self, parent=None):
@@ -44,18 +48,18 @@ class kmainForm(QMainWindow,Ui_KmainWindow):
     def initUi(self):
         self.setWindowOpacity(0.93)
         #日志目录
-        if os.path.exists("./logs")==False:
+        if not os.path.exists("./logs"):
             os.makedirs("./logs")
         #缓存数据目录 modules  classes
-        if os.path.exists("./tmp")==False:
+        if not os.path.exists("./tmp"):
             os.makedirs("./tmp")
         #从手机下载dumpdex脱壳的数据
-        if os.path.exists("./dumpdex")==False:
+        if not os.path.exists("./dumpdex"):
             os.makedirs("./dumpdex")
-        if os.path.exists("./fartdump") == False:
+        if not os.path.exists("./fartdump"):
             os.makedirs("./fartdump")
         #自定义脚本目录
-        if os.path.exists("./custom")==False:
+        if not os.path.exists("./custom"):
             os.makedirs("./custom")
 
         projectPath = os.path.dirname(os.path.abspath(__file__))
@@ -83,8 +87,7 @@ class kmainForm(QMainWindow,Ui_KmainWindow):
         self.actionPullDumpDexRes.triggered.connect(self.PullDumpDex)
         self.actionPushFridaServer.triggered.connect(self.PushFridaServer)
         self.actionPullFartRes.triggered.connect(self.PullFartRes)
-        self.actionFrida32Start.triggered.connect(self.Frida32Start)
-        self.actionFrida64Start.triggered.connect(self.Frida64Start)
+        self.actionFridaStart.triggered.connect(self.FridaStart)
 
         self.btnDumpPtr.clicked.connect(self.dumpPtr)
         self.btnDumpSo.clicked.connect(self.dumpSo)
@@ -309,20 +312,42 @@ class kmainForm(QMainWindow,Ui_KmainWindow):
             return
         QMessageBox().information(self, "提示", "下载完成")
 
+    def get_cpu_version(self):
+        command = f"{adb_path} shell getprop ro.product.cpu.abi"
+        complete = subprocess.run(command, check=True, shell=True,
+                                  stdout=subprocess.PIPE)
+        code = complete.returncode
+        if code == 0:
+            result = complete.stdout.decode("utf-8")
+        return result
     def PushFridaServer(self):
+        cpu_version=self.get_cpu_version()
+        if "arm64" in cpu_version:
+            adb_shell = subprocess.run(
+                f"{adb_path} push ./exec/hluda-server-14.2.18-android-arm64 /data/local/tmp/hluda", check=True,
+                shell=True,
+                stdout=subprocess.PIPE)
+            self.log(adb_shell.stdout.decode("utf-8"))
+            self.log("安装hluda64成功")
+        elif "armeabi" in cpu_version:
+            adb_shell = subprocess.run(f"{adb_path} push ./exec/hluda-server-14.2.18-android-arm /data/local/tmp/hluda", check=True, shell=True,
+                                       stdout=subprocess.PIPE)
+            self.log(adb_shell.stdout.decode("utf-8"))
+            self.log("安装hluda成功")
+            # if "error" in res:
+            #     QMessageBox().information(self, "提示", "上传失败."+res)
+            #     return
         try:
-            res=CmdUtil.execCmd("adb push ./exec/hluda-server-14.2.18-android-arm /data/local/tmp")
-            self.log(res)
-            if "error" in res:
-                QMessageBox().information(self, "提示", "上传失败."+res)
-                return
-            res = CmdUtil.execCmd("adb push ./exec/hluda-server-14.2.18-android-arm64 /data/local/tmp")
-            self.log(res)
-            res = CmdUtil.adbshellCmd("chmod 0777 /data/local/tmp/hluda*")
-            self.log(res)
-            QMessageBox().information(self, "提示", "上传完成")
-        except Exception as ex:
-            QMessageBox().information(self, "提示", "上传异常."+str(ex))
+            adb_shell = subprocess.Popen(f'{adb_path} shell', stdin=subprocess.PIPE, shell=True)
+            adb_shell.communicate(b'su\npkill -f hluda\nchmod 755 /data/local/tmp/hluda\n/data/local/tmp/hluda &\n',
+                                  timeout=5)
+        except subprocess.TimeoutExpired:
+            adb_shell.kill()
+            self.log("启动服务成功")
+            self.log("在命令行中使用frida-ps -U -ai测试你的环境是否成功了吧")
+        except Exception:
+            self.log(f"启动失败,{traceback.format_exc()}")
+        QMessageBox().information(self, "提示", "上传完成")
     def PullFartRes(self):
         cmd = ""
         if len(self.th.attachName) > 0:
@@ -339,17 +364,7 @@ class kmainForm(QMainWindow,Ui_KmainWindow):
         QMessageBox().information(self, "提示", "下载完成")
 
 
-    def Frida32Start(self):
-        projectPath=os.path.dirname(os.path.abspath(__file__))
-        if platform.system() == "Windows":
-            os.system("start " + projectPath+r"\sh\win\frida32.bat")
-        elif platform.system()=='Linux':
-            shfile = projectPath + "/sh/linux/frida32.sh"
-            os.system("gnome-terminal -e 'bash -c \"" + shfile + "; exec bash\"'")
-        else:
-            os.system("bash -c " + projectPath+"/sh/mac/frida32.sh")
-
-    def Frida64Start(self):
+    def FridaStart(self):
         projectPath = os.path.dirname(os.path.abspath(__file__))
         if platform.system() == "Windows":
             os.system("start " +projectPath+ r"\sh\win\frida64.bat")
@@ -357,7 +372,18 @@ class kmainForm(QMainWindow,Ui_KmainWindow):
             shfile = projectPath + "/sh/linux/frida64.sh"
             os.system("gnome-terminal -e 'bash -c \"" + shfile + "; exec bash\"'")
         else:
-            os.system("bash -c " +projectPath+ "/sh/mac/frida64.sh")
+            try:
+                adb_shell = subprocess.Popen(f'{adb_path} shell', stdin=subprocess.PIPE, shell=True)
+                adb_shell.communicate(b'su\npkill -f hluda\nchmod 755 /data/local/tmp/hluda\n/data/local/tmp/hluda &\n',
+                                      timeout=5)
+            except subprocess.TimeoutExpired:
+                adb_shell.kill()
+                self.log("启动服务成功")
+                self.log("在命令行中使用frida-ps -U -ai测试你的环境是否成功了吧")
+            except Exception:
+                self.log(f"启动失败,{traceback.format_exc()}")
+
+            # os.system("bash -c " +projectPath+ "/sh/mac/start_frida_server.sh")
 
     def ClearHookJson(self):
         path = "./hooks/"
